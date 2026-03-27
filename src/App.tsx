@@ -31,6 +31,10 @@ function App() {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
 
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'dark' ? 'light' : 'dark')
+  }
+
   const handleLogin = async () => {
     try {
       await signInWithPopup(auth, googleProvider)
@@ -257,7 +261,7 @@ function App() {
               style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '1rem', padding: '8px 0' }}
             />
             <button 
-              onClick={messages.length === 0 ? handleStartConversation() : handleSendClarification}
+              onClick={() => messages.length === 0 ? handleStartConversation() : handleSendClarification()}
               disabled={isStreaming || !inputText}
               style={{ 
                 background: 'var(--accent)', 
