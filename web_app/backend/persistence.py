@@ -89,7 +89,8 @@ class DynamoDBSaver(BaseCheckpointSaver):
         )
 
     def list(self, config: dict, *, filter: Optional[dict] = None, before: Optional[dict] = None, limit: Optional[int] = None) -> AsyncIterator[CheckpointTuple]:
-        # Basic implementation for listing checkpoints
+        # Implementation for listing checkpoints - must be an async generator if we want it to be AsyncIterator
+        # or we keep it sync and use it via alist
         thread_id = config["configurable"]["thread_id"]
         response = self.table.query(
             KeyConditionExpression=boto3.dynamodb.conditions.Key('thread_id').eq(thread_id),
@@ -113,6 +114,34 @@ class DynamoDBSaver(BaseCheckpointSaver):
                 metadata=self.serde.loads_typed((metadata_type, _to_bytes(item['metadata']))),
                 parent_config={"configurable": {"thread_id": thread_id, "checkpoint_id": item.get('parent_id')}} if item.get('parent_id') else None
             )
+
+    async def aget_tuple(self, config: dict) -> Optional[CheckpointTuple]:
+        import asyncio
+        return await asyncio.to_thread(self.get_tuple, config)
+
+    async def alist(self, config: dict, *, filter: Optional[dict] = None, before: Optional[dict] = None, limit: Optional[int] = None) -> AsyncIterator[CheckpointTuple]:
+        import asyncio
+        # We wrap the sync generator to make it an async iterator
+        sync_gen = self.list(config, filter=filter, before=before, limit=limit)
+        while True:
+            def _get_next():
+                try:
+                    return next(sync_gen)
+                except StopIteration:
+                    return StopIteration
+            
+            item = await asyncio.to_thread(_get_next)
+            if item is StopIteration:
+                break
+            yield item
+
+    async def aput(self, config: dict, checkpoint: Checkpoint, metadata: CheckpointMetadata, new_versions: dict) -> dict:
+        import asyncio
+        return await asyncio.to_thread(self.put, config, checkpoint, metadata, new_versions)
+
+    async def aput_writes(self, config: dict, writes: list, task_id: str) -> None:
+        import asyncio
+        return await asyncio.to_thread(self.put_writes, config, writes, task_id)
 
     def put(self, config: dict, checkpoint: Checkpoint, metadata: CheckpointMetadata, new_versions: dict) -> dict:
         thread_id = config["configurable"]["thread_id"]

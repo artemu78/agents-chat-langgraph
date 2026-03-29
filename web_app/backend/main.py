@@ -30,7 +30,7 @@ from persistence import DynamoDBSaver
 from langgraph.checkpoint.memory import MemorySaver
 
 app = FastAPI(title="AI Chat Nebula Glass API")
-API_VERSION = "2.12.0"
+API_VERSION = "2.13.0"
 
 # --- Attachment Processor ---
 def _process_attachments(text: str) -> str:
@@ -234,6 +234,8 @@ async def chat_stream(thread_id: str, request: Request):
 
             yield "data: [DONE]\n\n"
         except Exception as e:
+            # Important: log the exception so it appears in CloudWatch
+            _debug_log.exception("Error in event_generator: %s", str(e))
             yield f"data: {json.dumps({'type': 'error', 'content': str(e)})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
