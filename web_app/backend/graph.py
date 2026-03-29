@@ -8,9 +8,9 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.types import interrupt
 
 # --- Configuration ---
-# Default to a widely available model; override with GEMINI_MODEL if needed.
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-OPENAI_MODEL = "gpt-4o" # Updated to a more standard model for broader compatibility
+# Defaults match SAM template parameters; override with GEMINI_MODEL / OPENAI_MODEL.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
 
 # --- State Definition ---
 class State(TypedDict):

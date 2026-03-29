@@ -17,6 +17,14 @@ Parameters:
     Description: "JSON string of Firebase Service Account key"
     NoEcho: true
     Default: ""
+  GeminiModel:
+    Type: String
+    Description: "Google Gemini model id for chat and session naming"
+    Default: "gemini-3.1-flash-lite-preview"
+  OpenaiModel:
+    Type: String
+    Description: "OpenAI model id for chat"
+    Default: "gpt-5.4-nano"
 
 Globals:
   Function:
@@ -29,6 +37,8 @@ Globals:
         USE_DYNAMODB: "true"
         GEMINI_API_KEY: !Ref GeminiApiKey
         OPENAI_API_KEY: !Ref OpenaiApiKey
+        GEMINI_MODEL: !Ref GeminiModel
+        OPENAI_MODEL: !Ref OpenaiModel
         FIREBASE_CREDENTIALS: !Ref FirebaseCredentials
         DEV_MODE: "0"
 
