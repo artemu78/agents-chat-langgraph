@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Sun, Moon, MessageSquare, Send, Pause, Play, User, LogOut, Terminal, ShieldAlert } from 'lucide-react'
+import { Sun, Moon, MessageSquare, Send, Pause, Play, User, LogOut, Terminal, ShieldAlert, Paperclip } from 'lucide-react'
 
 // --- Helper Component ---
 const FormattedMessage = ({ text, role }: { text: string, role: string }) => {
@@ -56,6 +56,30 @@ function App() {
   
   const { messages, isStreaming, isInterrupted, error, startStream, stopStream, setMessages } = useSSE(threadId)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    if (ext !== 'md' && ext !== 'mdc') {
+      const confirmed = window.confirm(`Hint: Try to upload MD/MDC format only, as it saves context window drastically. Non-markdown files consume more tokens. Are you sure you want to attach "${file.name}"?`)
+      if (!confirmed) {
+        if (fileInputRef.current) fileInputRef.current.value = ''
+        return
+      }
+    }
+
+    const reader = new FileReader()
+    reader.onload = (event) => {
+      const content = event.target?.result as string
+      const fileHeader = `\n[ATTACHED FILE: ${file.name}]\n${content}\n[END OF ATTACHMENT]\n`
+      setInputText(prev => prev + fileHeader)
+    }
+    reader.readAsText(file)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
 
   useEffect(() => {
     if (isDevAuthBypass) {
@@ -360,14 +384,51 @@ function App() {
 
         <footer style={{ padding: '24px 32px' }}>
           <div className="glass-card" style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', gap: '12px', border: isInterrupted ? '2px solid var(--accent)' : '1px solid var(--glass-border)' }}>
-            <input 
-              type="text" 
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isStreaming || (tokensUsed !== null && tokensUsed >= 500000)}
+              style={{ 
+                background: 'none', 
+                border: 'none', 
+                cursor: 'pointer', 
+                display: 'flex', 
+                alignItems: 'center', 
+                justifyContent: 'center',
+                opacity: (isStreaming || (tokensUsed !== null && tokensUsed >= 500000)) ? 0.5 : 1,
+                color: 'var(--text-secondary)'
+              }}
+              title="Attach File (MD/MDC preferred)"
+            >
+              <Paperclip size={20} />
+            </button>
+            <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileSelect} />
+            
+            <textarea 
               placeholder={(tokensUsed !== null && tokensUsed >= 500000) ? "Token limit reached" : messages.length === 0 ? "Enter a seed topic..." : isInterrupted ? "Type your clarification..." : "Steer the conversation..."} 
               value={inputText}
+              rows={1}
               onChange={(e) => setInputText(e.target.value)}
               disabled={tokensUsed !== null && tokensUsed >= 500000}
-              onKeyPress={(e) => e.key === 'Enter' && (messages.length === 0 ? handleStartConversation() : handleSendClarification())}
-              style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '1rem', padding: '8px 0' }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (inputText && !isStreaming && (tokensUsed === null || tokensUsed < 500000)) {
+                    messages.length === 0 ? handleStartConversation() : handleSendClarification();
+                  }
+                }
+              }}
+              style={{ 
+                flex: 1, 
+                background: 'none', 
+                border: 'none', 
+                outline: 'none', 
+                color: 'var(--text-primary)', 
+                fontSize: '1rem', 
+                padding: '8px 0',
+                resize: 'none',
+                fontFamily: 'inherit',
+                maxHeight: '150px'
+              }}
             />
             <button 
               onClick={() => messages.length === 0 ? handleStartConversation() : handleSendClarification()}
@@ -386,6 +447,11 @@ function App() {
             >
               <Send size={20} color="white" />
             </button>
+          </div>
+          <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'center', gap: '20px' }}>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', opacity: 0.8 }}>
+              <b>Tip:</b> Try to upload <b>.md/.mdc</b> format only, as it saves context window drastically.
+            </p>
           </div>
           {isInterrupted && (
             <p style={{ fontSize: '0.75rem', color: 'var(--accent)', marginTop: '8px', textAlign: 'center', fontWeight: 600 }}>
