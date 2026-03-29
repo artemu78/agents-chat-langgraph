@@ -105,6 +105,7 @@ function App() {
   const [sessionName, setSessionName] = useState<string | null>(null)
   const [isPaused, setIsPaused] = useState(false)
   const [inputText, setInputText] = useState('')
+  const [attachment, setAttachment] = useState<{ name: string, content: string, url: string } | null>(null)
   const [user, setUser] = useState<FirebaseUser | null>(null)
   const [loading, setLoading] = useState(true)
   const [tokensUsed, setTokensUsed] = useState<number | null>(null)
@@ -136,8 +137,8 @@ function App() {
     const reader = new FileReader()
     reader.onload = (event) => {
       const content = event.target?.result as string
-      const fileHeader = `\n[ATTACHED FILE: ${file.name}]\n${content}\n[END OF ATTACHMENT]\n`
-      setInputText(prev => prev + fileHeader)
+      const url = URL.createObjectURL(file)
+      setAttachment({ name: file.name, content, url })
     }
     reader.readAsText(file)
     if (fileInputRef.current) fileInputRef.current.value = ''
@@ -241,21 +242,27 @@ function App() {
   }
 
   const handleStartConversation = async () => {
-    if (!inputText || !threadId) return
+    const textToSend = inputText + (attachment ? `\n\n[ATTACHED FILE: ${attachment.name}]\n${attachment.content}\n[END OF ATTACHMENT]\n` : '');
+    if (!textToSend || !threadId) return
     
+    setInputText('')
+    if (attachment) {
+      URL.revokeObjectURL(attachment.url);
+      setAttachment(null);
+    }
+
     const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
     try {
       const headers = await getHeaders()
       const response = await fetch(`${apiUrl}/chat/input`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ thread_id: threadId, seed_topic: inputText })
+        body: JSON.stringify({ thread_id: threadId, seed_topic: textToSend })
       })
       const data = await response.json()
       if (data.session_name) {
         setSessionName(data.session_name)
       }
-      setInputText('')
       startStream()
     } catch (e) {
       console.error('Failed to start conversation', e)
@@ -263,8 +270,15 @@ function App() {
   }
 
   const handleSendClarification = async () => {
-    if (!inputText || !threadId) return
-    setMessages(prev => [...prev, { role: 'Human', content: inputText }])
+    const textToSend = inputText + (attachment ? `\n\n[ATTACHED FILE: ${attachment.name}]\n${attachment.content}\n[END OF ATTACHMENT]\n` : '');
+    if (!textToSend || !threadId) return
+    setMessages(prev => [...prev, { role: 'Human', content: textToSend }])
+    
+    setInputText('')
+    if (attachment) {
+      URL.revokeObjectURL(attachment.url);
+      setAttachment(null);
+    }
     
     const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
     try {
@@ -272,9 +286,8 @@ function App() {
       await fetch(`${apiUrl}/chat/input`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ thread_id: threadId, content: inputText })
+        body: JSON.stringify({ thread_id: threadId, content: textToSend })
       })
-      setInputText('')
       startStream()
     } catch (e) {
       console.error('Failed to send clarification', e)
@@ -465,36 +478,58 @@ function App() {
             </button>
             <input type="file" ref={fileInputRef} style={{ display: 'none' }} onChange={handleFileSelect} />
             
-            <textarea 
-              placeholder={(tokensUsed !== null && tokensUsed >= 500000) ? "Token limit reached" : messages.length === 0 ? "Enter a seed topic..." : isInterrupted ? "Type your clarification..." : "Steer the conversation..."} 
-              value={inputText}
-              rows={1}
-              onChange={(e) => setInputText(e.target.value)}
-              disabled={tokensUsed !== null && tokensUsed >= 500000}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  if (inputText && !isStreaming && (tokensUsed === null || tokensUsed < 500000)) {
-                    messages.length === 0 ? handleStartConversation() : handleSendClarification();
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+              <textarea 
+                placeholder={(tokensUsed !== null && tokensUsed >= 500000) ? "Token limit reached" : messages.length === 0 ? "Enter a seed topic..." : isInterrupted ? "Type your clarification..." : "Steer the conversation..."} 
+                value={inputText}
+                rows={1}
+                onChange={(e) => setInputText(e.target.value)}
+                disabled={tokensUsed !== null && tokensUsed >= 500000}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    if ((inputText || attachment) && !isStreaming && (tokensUsed === null || tokensUsed < 500000)) {
+                      messages.length === 0 ? handleStartConversation() : handleSendClarification();
+                    }
                   }
-                }
-              }}
-              style={{ 
-                flex: 1, 
-                background: 'none', 
-                border: 'none', 
-                outline: 'none', 
-                color: 'var(--text-primary)', 
-                fontSize: '1rem', 
-                padding: '8px 0',
-                resize: 'none',
-                fontFamily: 'inherit',
-                maxHeight: '150px'
-              }}
-            />
+                }}
+                style={{ 
+                  flex: 1, 
+                  background: 'none', 
+                  border: 'none', 
+                  outline: 'none', 
+                  color: 'var(--text-primary)', 
+                  fontSize: '1rem', 
+                  padding: '8px 0',
+                  resize: 'none',
+                  fontFamily: 'inherit',
+                  maxHeight: '150px'
+                }}
+              />
+              
+              {attachment && (
+                <div style={{ marginTop: '4px', marginBottom: '4px', padding: '6px 12px', background: 'var(--glass-bg)', borderRadius: '8px', border: '1px solid var(--glass-border)', display: 'inline-flex', alignItems: 'center', gap: '8px', alignSelf: 'flex-start' }}>
+                  <a href={attachment.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.85rem', color: 'var(--text-primary)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <Paperclip size={14} />
+                    {attachment.name}
+                  </a>
+                  <button 
+                    onClick={() => {
+                      URL.revokeObjectURL(attachment.url);
+                      setAttachment(null);
+                      if (fileInputRef.current) fileInputRef.current.value = '';
+                    }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', fontSize: '1.2rem', padding: '0 4px', lineHeight: 1 }}
+                    title="Remove attachment"
+                  >
+                    &times;
+                  </button>
+                </div>
+              )}
+            </div>
             <button 
               onClick={() => messages.length === 0 ? handleStartConversation() : handleSendClarification()}
-              disabled={isStreaming || !inputText || (tokensUsed !== null && tokensUsed >= 500000)}
+              disabled={isStreaming || (!inputText && !attachment) || (tokensUsed !== null && tokensUsed >= 500000)}
               style={{ 
                 background: 'var(--accent)', 
                 border: 'none', 
@@ -504,7 +539,7 @@ function App() {
                 display: 'flex', 
                 alignItems: 'center', 
                 justifyContent: 'center',
-                opacity: (isStreaming || !inputText || (tokensUsed !== null && tokensUsed >= 500000)) ? 0.5 : 1
+                opacity: (isStreaming || (!inputText && !attachment) || (tokensUsed !== null && tokensUsed >= 500000)) ? 0.5 : 1
               }}
             >
               <Send size={20} color="white" />
