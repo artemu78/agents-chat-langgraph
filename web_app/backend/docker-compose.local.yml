@@ -1,0 +1,9 @@
+# DynamoDB Local for SAM local / Uvicorn with DYNAMODB_ENDPOINT_URL.
+# Usage: docker compose -f docker-compose.local.yml up -d
+# Default: in-memory (no disk). To persist, replace -inMemory with -sharedDb and mount a volume.
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    command: ["-jar", "DynamoDBLocal.jar", "-inMemory"]
+    ports:
+      - "8000:8000"

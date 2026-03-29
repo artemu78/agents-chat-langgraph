@@ -1,3 +1,26 @@
-node_modules
+web_app/backend/firebase-credentials.json
+
+# Node.js
+node_modules/
+dist/
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+
+# AWS SAM
+.aws-sam/
+sam-local-env.json
+
+# OS
 .DS_Store
-dist
+
+# Cursor/Agent artifacts
+.cursor/
+.agents/
+skills-lock.json

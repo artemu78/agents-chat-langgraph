@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+mangum
+langgraph
+google-genai
+openai
+boto3
+pydantic
+python-dotenv
+firebase-admin
+python-multipart

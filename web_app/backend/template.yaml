@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Nebula Glass AI Chat - Serverless FastAPI with LangGraph and DynamoDB
+
+Parameters:
+  GeminiApiKey:
+    Type: String
+    Description: "API Key for Google Gemini"
+    NoEcho: true
+  OpenaiApiKey:
+    Type: String
+    Description: "API Key for OpenAI"
+    NoEcho: true
+  FirebaseCredentials:
+    Type: String
+    Description: "JSON string of Firebase Service Account key"
+    NoEcho: true
+    Default: ""
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.12
+    Environment:
+      Variables:
+        DYNAMODB_TABLE: !Ref ChatSessionsTable
+        USE_DYNAMODB: "true"
+        GEMINI_API_KEY: !Ref GeminiApiKey
+        OPENAI_API_KEY: !Ref OpenaiApiKey
+        FIREBASE_CREDENTIALS: !Ref FirebaseCredentials
+        DEV_MODE: "0"
+
+Resources:
+  # HTTP API
+  NebulaChatApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowOrigins:
+          - "*" 
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        AllowHeaders:
+          - "*"
+
+  # Lambda Function
+  NebulaChatFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: main.handler
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref NebulaChatApi
+            Path: /{proxy+}
+            Method: ANY
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ChatSessionsTable
+
+  # DynamoDB Table
+  ChatSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: AI_Chat_Sessions
+      AttributeDefinitions:
+        - AttributeName: thread_id
+          AttributeType: S
+        - AttributeName: checkpoint_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: thread_id
+          KeyType: HASH
+        - AttributeName: checkpoint_id
+          KeyType: RANGE
+      BillingMode: PAY_PER_REQUEST
+
+Outputs:
+  ApiUrl:
+    Description: "API Gateway endpoint URL"
+    Value: !Sub "https://${NebulaChatApi}.execute-api.${AWS::Region}.amazonaws.com"
