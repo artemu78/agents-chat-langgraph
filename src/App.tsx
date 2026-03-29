@@ -1,22 +1,73 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Sun, Moon, MessageSquare, Send, Pause, Play, User, LogOut, Terminal } from 'lucide-react'
+import { Sun, Moon, MessageSquare, Send, Pause, Play, User, LogOut, Terminal, ShieldAlert } from 'lucide-react'
+
+// --- Helper Component ---
+const FormattedMessage = ({ text, role }: { text: string, role: string }) => {
+  if (role !== 'OpenAI') return <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
+
+  const auditMatch = text.match(/<audit>([\s\S]*?)<\/audit>/);
+  if (!auditMatch) return <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
+
+  const auditContent = auditMatch[1].trim();
+  const remainingText = text.replace(/<audit>[\s\S]*?<\/audit>/, '').trim();
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {remainingText && <p style={{ whiteSpace: 'pre-wrap' }}>{remainingText}</p>}
+      <div 
+        className="audit-block"
+        style={{
+          background: 'rgba(0, 0, 0, 0.2)',
+          borderLeft: '4px solid #f59e0b',
+          padding: '12px 16px',
+          borderRadius: '4px',
+          fontFamily: 'monospace',
+          fontSize: '0.85rem',
+          color: '#fcd34d'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', fontWeight: 'bold', color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <ShieldAlert size={16} /> Audit & Optimization Log
+        </div>
+        <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{auditContent}</p>
+      </div>
+    </div>
+  )
+}
+// --- End Helper ---
 import { useSSE } from './hooks/useSSE'
 
-import { auth, googleProvider } from './firebase'
+import { auth, googleProvider, devFirebaseDisabled } from './firebase'
 import { signInWithPopup, signOut, onAuthStateChanged, User as FirebaseUser } from 'firebase/auth'
+
+const isDevAuthBypass = devFirebaseDisabled
+/** Stand-in user when running `vite` without Firebase sign-in */
+const DEV_USER = { uid: 'dev', displayName: 'Dev user' } as FirebaseUser
 
 function App() {
   const [theme, setTheme] = useState('dark')
   const [threadId, setThreadId] = useState<string | null>(null)
+  const [sessionName, setSessionName] = useState<string | null>(null)
   const [isPaused, setIsPaused] = useState(false)
   const [inputText, setInputText] = useState('')
   const [user, setUser] = useState<FirebaseUser | null>(null)
   const [loading, setLoading] = useState(true)
+  const [tokensUsed, setTokensUsed] = useState<number | null>(null)
   
   const { messages, isStreaming, isInterrupted, error, startStream, stopStream, setMessages } = useSSE(threadId)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    if (isDevAuthBypass) {
+      setUser(DEV_USER)
+      setLoading(false)
+      setThreadId((tid) => tid ?? 'session_dev_' + Date.now().toString(36))
+      return
+    }
+    if (!auth) {
+      setLoading(false)
+      return
+    }
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u)
       setLoading(false)
@@ -36,6 +87,7 @@ function App() {
   }
 
   const handleLogin = async () => {
+    if (!auth) return
     try {
       await signInWithPopup(auth, googleProvider)
     } catch (e) {
@@ -44,21 +96,62 @@ function App() {
   }
 
   const handleLogout = async () => {
+    if (isDevAuthBypass) {
+      setThreadId('session_dev_' + Date.now().toString(36))
+      setSessionName(null)
+      setMessages([])
+      return
+    }
+    if (!auth) return
     try {
       await signOut(auth)
       setThreadId(null)
+      setSessionName(null)
       setMessages([])
     } catch (e) {
       console.error('Logout failed', e)
     }
   }
 
-  const getHeaders = async () => {
-    const token = await auth.currentUser?.getIdToken()
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
+  
+  const fetchTokens = async () => {
+    if (!auth?.currentUser && !isDevAuthBypass) return
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    try {
+      const headers = await getHeaders()
+      const res = await fetch(`${apiUrl}/user/tokens`, { headers })
+      const data = await res.json()
+      if (data && typeof data.tokens_used === 'number') {
+        setTokensUsed(data.tokens_used)
+      }
+    } catch (e) {
+      console.error('Failed to fetch tokens', e)
     }
+  }
+
+  // Fetch tokens initially and when stream stops
+  useEffect(() => {
+    if (!loading && user) {
+      fetchTokens()
+    }
+  }, [loading, user])
+
+  useEffect(() => {
+    if (!isStreaming) {
+      fetchTokens()
+    }
+  }, [isStreaming])
+
+  const getHeaders = async () => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (isDevAuthBypass) {
+      return headers
+    }
+    const token = await auth?.currentUser?.getIdToken()
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+    return headers
   }
 
   const handleStartConversation = async () => {
@@ -67,11 +160,15 @@ function App() {
     const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
     try {
       const headers = await getHeaders()
-      await fetch(`${apiUrl}/chat/input`, {
+      const response = await fetch(`${apiUrl}/chat/input`, {
         method: 'POST',
         headers,
         body: JSON.stringify({ thread_id: threadId, seed_topic: inputText })
       })
+      const data = await response.json()
+      if (data.session_name) {
+        setSessionName(data.session_name)
+      }
       setInputText('')
       startStream()
     } catch (e) {
@@ -162,14 +259,25 @@ function App() {
           <div style={{ width: '40px', height: '40px', background: 'var(--accent)', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <MessageSquare color="white" size={24} />
           </div>
+
           <h2 style={{ fontSize: '1.2rem' }}>Nebula Chat</h2>
         </div>
+        
+        {tokensUsed !== null && (
+          <div style={{ marginBottom: '24px', padding: '8px 12px', background: 'var(--glass-bg)', border: '1px solid var(--glass-border)', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Limit</span>
+            <span style={{ fontWeight: 600, color: tokensUsed >= 500000 ? '#ef4444' : 'var(--text-primary)' }}>
+              {Math.max(0, 500000 - tokensUsed) >= 1000 ? Math.round(Math.max(0, 500000 - tokensUsed)/1000) + 'k' : Math.max(0, 500000 - tokensUsed)} tokens left
+            </span>
+          </div>
+        )}
+
 
         <nav style={{ flex: 1 }}>
           <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '16px' }}>Current Session</p>
           <div className="glass-card" style={{ padding: '12px', background: 'var(--accent-glow)', border: '1px solid var(--accent)' }}>
-            <p style={{ fontSize: '0.9rem', fontWeight: 500 }}>{threadId}</p>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Active now</p>
+            <p style={{ fontSize: '0.9rem', fontWeight: 500 }}>{sessionName || 'New Session'}</p>
+            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID: {threadId}</p>
           </div>
         </nav>
 
@@ -229,7 +337,7 @@ function App() {
                     border: msg.role === 'OpenAI' ? 'none' : '1px solid var(--glass-border)'
                   }}
                 >
-                  <p style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</p>
+                  <FormattedMessage text={msg.content} role={msg.role} />
                 </div>
              </div>
            ))}
@@ -254,15 +362,16 @@ function App() {
           <div className="glass-card" style={{ display: 'flex', alignItems: 'center', padding: '8px 16px', gap: '12px', border: isInterrupted ? '2px solid var(--accent)' : '1px solid var(--glass-border)' }}>
             <input 
               type="text" 
-              placeholder={messages.length === 0 ? "Enter a seed topic..." : isInterrupted ? "Type your clarification..." : "Steer the conversation..."} 
+              placeholder={(tokensUsed !== null && tokensUsed >= 500000) ? "Token limit reached" : messages.length === 0 ? "Enter a seed topic..." : isInterrupted ? "Type your clarification..." : "Steer the conversation..."} 
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
+              disabled={tokensUsed !== null && tokensUsed >= 500000}
               onKeyPress={(e) => e.key === 'Enter' && (messages.length === 0 ? handleStartConversation() : handleSendClarification())}
               style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: 'var(--text-primary)', fontSize: '1rem', padding: '8px 0' }}
             />
             <button 
               onClick={() => messages.length === 0 ? handleStartConversation() : handleSendClarification()}
-              disabled={isStreaming || !inputText}
+              disabled={isStreaming || !inputText || (tokensUsed !== null && tokensUsed >= 500000)}
               style={{ 
                 background: 'var(--accent)', 
                 border: 'none', 
@@ -272,7 +381,7 @@ function App() {
                 display: 'flex', 
                 alignItems: 'center', 
                 justifyContent: 'center',
-                opacity: (isStreaming || !inputText) ? 0.5 : 1
+                opacity: (isStreaming || !inputText || (tokensUsed !== null && tokensUsed >= 500000)) ? 0.5 : 1
               }}
             >
               <Send size={20} color="white" />
