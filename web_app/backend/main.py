@@ -30,7 +30,7 @@ from persistence import DynamoDBSaver
 from langgraph.checkpoint.memory import MemorySaver
 
 app = FastAPI(title="AI Chat Nebula Glass API")
-API_VERSION = "2.13.0"
+API_VERSION = "2.14.0"
 
 # --- Attachment Processor ---
 def _process_attachments(text: str) -> str:

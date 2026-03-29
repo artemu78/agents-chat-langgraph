@@ -171,7 +171,7 @@ class DynamoDBSaver(BaseCheckpointSaver):
 
     def put_writes(self, config: dict, writes: list, task_id: str) -> None:
         thread_id = config["configurable"]["thread_id"]
-        checkpoint_id = config["configurable"]["checkpoint_id"]
+        checkpoint_id = config["configurable"].get("checkpoint_id", "0")
         
         # We store writes with a special prefix in the checkpoint_id to keep the same table
         # Format: writes#{task_id}
