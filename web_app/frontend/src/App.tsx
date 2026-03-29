@@ -1,19 +1,74 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Sun, Moon, MessageSquare, Send, Pause, Play, User, LogOut, Terminal, ShieldAlert, Paperclip } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 // --- Helper Component ---
 const FormattedMessage = ({ text, role }: { text: string, role: string }) => {
-  if (role !== 'OpenAI') return <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+
+  const renderMarkdown = (content: string) => (
+    <ReactMarkdown 
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p: ({node, ...props}) => <p style={{ margin: '0 0 12px 0', lineHeight: '1.6' }} {...props} />,
+        code: ({node, ...props}) => (
+          <code 
+            style={{ 
+              background: 'rgba(0, 0, 0, 0.2)', 
+              padding: '2px 4px', 
+              borderRadius: '4px', 
+              fontFamily: 'monospace',
+              fontSize: '0.9em'
+            }} 
+            {...props} 
+          />
+        ),
+        pre: ({node, ...props}) => (
+          <pre 
+            style={{ 
+              background: 'rgba(0, 0, 0, 0.3)', 
+              padding: '16px', 
+              borderRadius: '12px', 
+              overflowX: 'auto',
+              marginBottom: '16px',
+              border: '1px solid var(--glass-border)'
+            }} 
+            {...props} 
+          />
+        ),
+        ul: ({node, ...props}) => <ul style={{ marginLeft: '20px', marginBottom: '16px' }} {...props} />,
+        ol: ({node, ...props}) => <ol style={{ marginLeft: '20px', marginBottom: '16px' }} {...props} />,
+        li: ({node, ...props}) => <li style={{ marginBottom: '4px' }} {...props} />,
+        blockquote: ({node, ...props}) => (
+          <blockquote 
+            style={{ 
+              borderLeft: '4px solid var(--accent)', 
+              paddingLeft: '16px', 
+              margin: '0 0 16px 0',
+              color: 'var(--text-secondary)'
+            }} 
+            {...props} 
+          />
+        ),
+        a: ({node, ...props}) => <a style={{ color: 'var(--accent)', textDecoration: 'underline' }} {...props} />,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  )
+
+  if (role !== 'OpenAI') return <div style={{ whiteSpace: 'pre-wrap' }}>{renderMarkdown(text)}</div>
 
   const auditMatch = text.match(/<audit>([\s\S]*?)<\/audit>/);
-  if (!auditMatch) return <p style={{ whiteSpace: 'pre-wrap' }}>{text}</p>
+  if (!auditMatch) return <div style={{ whiteSpace: 'pre-wrap' }}>{renderMarkdown(text)}</div>
 
   const auditContent = auditMatch[1].trim();
   const remainingText = text.replace(/<audit>[\s\S]*?<\/audit>/, '').trim();
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      {remainingText && <p style={{ whiteSpace: 'pre-wrap' }}>{remainingText}</p>}
+      {remainingText && <div style={{ whiteSpace: 'pre-wrap' }}>{renderMarkdown(remainingText)}</div>}
       <div 
         className="audit-block"
         style={{
@@ -29,7 +84,7 @@ const FormattedMessage = ({ text, role }: { text: string, role: string }) => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', fontWeight: 'bold', color: '#f59e0b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
           <ShieldAlert size={16} /> Audit & Optimization Log
         </div>
-        <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{auditContent}</p>
+        <div style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{renderMarkdown(auditContent)}</div>
       </div>
     </div>
   )
@@ -57,6 +112,13 @@ function App() {
   const { messages, isStreaming, isInterrupted, error, startStream, stopStream, setMessages } = useSSE(threadId)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight
+    }
+  }, [messages, isStreaming])
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
