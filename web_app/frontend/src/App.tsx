@@ -58,7 +58,53 @@ const FormattedMessage = ({ text, role }: { text: string, role: string }) => {
     </ReactMarkdown>
   )
 
-  if (role !== 'OpenAI') return <div style={{ whiteSpace: 'pre-wrap' }}>{renderMarkdown(text)}</div>
+  const hatStyles: Record<string, { color: string, bg: string }> = {
+    'White': { color: '#64748b', bg: 'rgba(248, 250, 252, 0.1)' },
+    'Red': { color: '#ef4444', bg: 'rgba(239, 68, 68, 0.1)' },
+    'Black': { color: '#0f172a', bg: 'rgba(15, 23, 42, 0.1)' },
+    'Yellow': { color: '#eab308', bg: 'rgba(234, 179, 8, 0.1)' },
+    'Green': { color: '#22c55e', bg: 'rgba(34, 197, 94, 0.1)' },
+    'Blue': { color: '#3b82f6', bg: 'rgba(59, 130, 246, 0.1)' }
+  };
+
+  const hatMatch = text.match(/^\[(White|Red|Black|Yellow|Green|Blue) Hat\]\s*([\s\S]*)$/);
+  
+  if (hatMatch) {
+    const hat = hatMatch[1];
+    const content = hatMatch[2];
+    const style = hatStyles[hat];
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ 
+          display: 'inline-flex', 
+          alignItems: 'center', 
+          gap: '6px', 
+          fontSize: '0.7rem', 
+          fontWeight: 700, 
+          textTransform: 'uppercase', 
+          letterSpacing: '0.05em',
+          color: style.color,
+          background: style.bg,
+          padding: '2px 8px',
+          borderRadius: '4px',
+          width: 'fit-content'
+        }}>
+          <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: style.color }}></div>
+          {hat} Hat
+        </div>
+        <div style={{ whiteSpace: 'pre-wrap' }}>{renderMarkdown(content)}</div>
+      </div>
+    );
+  }
+
+  if (role === 'Orchestrator') {
+    return (
+      <div style={{ borderLeft: '3px solid #3b82f6', paddingLeft: '12px' }}>
+        <div style={{ whiteSpace: 'pre-wrap' }}>{renderMarkdown(text)}</div>
+      </div>
+    );
+  }
 
   const auditMatch = text.match(/<audit>([\s\S]*?)<\/audit>/);
   if (!auditMatch) return <div style={{ whiteSpace: 'pre-wrap' }}>{renderMarkdown(text)}</div>
@@ -540,18 +586,28 @@ function App() {
            )}
            
            {messages.map((msg, i) => (
-             <div key={i} style={{ alignSelf: msg.role === 'Human' || msg.role === 'OpenAI' ? 'flex-end' : 'flex-start', maxWidth: '80%' }}>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginBottom: '4px', textAlign: msg.role === 'Human' || msg.role === 'OpenAI' ? 'right' : 'left' }}>
+             <div key={i} style={{ 
+               alignSelf: msg.role === 'Human' ? 'flex-end' : 'flex-start', 
+               maxWidth: '80%',
+               width: msg.role === 'Orchestrator' ? '80%' : 'auto'
+             }}>
+                <p style={{ 
+                  fontSize: '0.75rem', 
+                  color: 'var(--text-secondary)', 
+                  marginBottom: '4px', 
+                  textAlign: msg.role === 'Human' ? 'right' : 'left' 
+                }}>
                   {msg.role}
                 </p>
                 <div 
                   className="glass-card" 
                   style={{ 
                     padding: '16px', 
-                    borderRadius: msg.role === 'Human' || msg.role === 'OpenAI' ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
-                    background: msg.role === 'OpenAI' ? 'var(--accent)' : 'var(--glass-bg)',
+                    borderRadius: msg.role === 'Human' ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
+                    background: msg.role === 'Orchestrator' ? 'rgba(59, 130, 246, 0.1)' : (msg.role === 'OpenAI' ? 'var(--accent)' : 'var(--glass-bg)'),
                     color: msg.role === 'OpenAI' ? 'white' : 'var(--text-primary)',
-                    border: msg.role === 'OpenAI' ? 'none' : '1px solid var(--glass-border)'
+                    border: msg.role === 'Orchestrator' ? '1px solid #3b82f6' : (msg.role === 'OpenAI' ? 'none' : '1px solid var(--glass-border)'),
+                    boxShadow: msg.role === 'Orchestrator' ? '0 0 15px rgba(59, 130, 246, 0.2)' : 'none'
                   }}
                 >
                   <FormattedMessage text={msg.content} role={msg.role} />

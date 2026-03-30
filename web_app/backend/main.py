@@ -30,7 +30,7 @@ from persistence import DynamoDBSaver, save_user_session, list_user_sessions
 from langgraph.checkpoint.memory import MemorySaver
 
 app = FastAPI(title="AI Chat Nebula Glass API")
-API_VERSION = "2.15.1"
+API_VERSION = "2.16.1"
 
 # ... (skipped some parts for brevity in replace call, but I will include them in old_string/new_string)
 
