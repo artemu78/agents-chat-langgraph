@@ -76,5 +76,5 @@ export function useSSE(threadId: string | null) {
     }
   };
 
-  return { messages, isStreaming, isInterrupted, error, startStream, stopStream, setMessages };
+  return { messages, isStreaming, isInterrupted, error, startStream, stopStream, setMessages, setIsInterrupted };
 }

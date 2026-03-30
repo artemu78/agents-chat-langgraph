@@ -109,8 +109,9 @@ function App() {
   const [user, setUser] = useState<FirebaseUser | null>(null)
   const [loading, setLoading] = useState(true)
   const [tokensUsed, setTokensUsed] = useState<number | null>(null)
+  const [sessions, setSessions] = useState<any[]>([])
   
-  const { messages, isStreaming, isInterrupted, error, startStream, stopStream, setMessages } = useSSE(threadId)
+  const { messages, isStreaming, isInterrupted, error, startStream, stopStream, setMessages, setIsInterrupted } = useSSE(threadId)
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -216,16 +217,66 @@ function App() {
     }
   }
 
+  const fetchSessions = async () => {
+    if (!auth?.currentUser && !isDevAuthBypass) return
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    try {
+      const headers = await getHeaders()
+      const res = await fetch(`${apiUrl}/sessions`, { headers })
+      const data = await res.json()
+      if (data && data.sessions) {
+        setSessions(data.sessions)
+      }
+    } catch (e) {
+      console.error('Failed to fetch sessions', e)
+    }
+  }
+
+  const handleSwitchSession = async (tid: string) => {
+    if (tid === threadId) return
+    stopStream()
+    setThreadId(tid)
+    setMessages([])
+    setSessionName('Loading...')
+    
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    try {
+      const headers = await getHeaders()
+      const res = await fetch(`${apiUrl}/session/${tid}/history`, { headers })
+      const data = await res.json()
+      if (data.messages) {
+        setMessages(data.messages)
+        setSessionName(data.session_name || 'Untitled Session')
+        setIsPaused(data.paused || false)
+        setIsInterrupted(data.is_asking || false)
+      }
+    } catch (e) {
+      console.error('Failed to fetch session history', e)
+      setSessionName('Error loading session')
+    }
+  }
+
+  const handleNewChat = () => {
+    stopStream()
+    const newId = (isDevAuthBypass ? 'session_dev_' : 'session_' + (user?.uid.slice(0, 8) || 'user') + '_') + Date.now().toString(36)
+    setThreadId(newId)
+    setSessionName(null)
+    setMessages([])
+    setInputText('')
+  }
+
   // Fetch tokens initially and when stream stops
   useEffect(() => {
     if (!loading && user) {
       fetchTokens()
+      fetchSessions()
     }
   }, [loading, user])
 
   useEffect(() => {
     if (!isStreaming) {
       fetchTokens()
+      fetchSessions()
     }
   }, [isStreaming])
 
@@ -372,11 +423,78 @@ function App() {
         )}
 
 
-        <nav style={{ flex: 1 }}>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '16px' }}>Current Session</p>
-          <div className="glass-card" style={{ padding: '12px', background: 'var(--accent-glow)', border: '1px solid var(--accent)' }}>
-            <p style={{ fontSize: '0.9rem', fontWeight: 500 }}>{sessionName || 'New Session'}</p>
-            <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID: {threadId}</p>
+        <nav style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <button 
+            onClick={handleNewChat}
+            className="glass-card" 
+            style={{ 
+              width: '100%', 
+              padding: '12px', 
+              background: 'var(--accent)', 
+              color: 'white', 
+              border: 'none', 
+              borderRadius: '12px', 
+              fontSize: '0.9rem', 
+              fontWeight: 600, 
+              cursor: 'pointer', 
+              display: 'flex', 
+              alignItems: 'center', 
+              justifyContent: 'center', 
+              gap: '8px',
+              marginBottom: '16px'
+            }}
+          >
+            + New Conversation
+          </button>
+
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '8px' }}>Recent Sessions</p>
+          
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {sessions.length === 0 && !sessionName && (
+              <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
+                No recent sessions
+              </div>
+            )}
+            
+            {/* Current active session if not in list yet */}
+            {threadId && !sessions.find(s => s.thread_id === threadId) && (
+              <div 
+                className="glass-card" 
+                style={{ 
+                  padding: '12px', 
+                  background: 'var(--accent-glow)', 
+                  border: '1px solid var(--accent)',
+                  cursor: 'default'
+                }}
+              >
+                <p style={{ fontSize: '0.9rem', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {sessionName || 'New Session'}
+                </p>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>ID: {threadId.slice(0, 12)}...</p>
+              </div>
+            )}
+
+            {sessions.map((s) => (
+              <div 
+                key={s.thread_id}
+                onClick={() => handleSwitchSession(s.thread_id)}
+                className="glass-card" 
+                style={{ 
+                  padding: '12px', 
+                  background: s.thread_id === threadId ? 'var(--accent-glow)' : 'var(--glass-bg)', 
+                  border: s.thread_id === threadId ? '1px solid var(--accent)' : '1px solid var(--glass-border)',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease'
+                }}
+              >
+                <p style={{ fontSize: '0.9rem', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {s.session_name}
+                </p>
+                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                  {new Date(s.updated_at * 1000).toLocaleDateString()}
+                </p>
+              </div>
+            ))}
           </div>
         </nav>
 

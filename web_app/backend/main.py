@@ -26,11 +26,13 @@ def _trace(msg: str, *args: object) -> None:
 from langgraph.errors import GraphInterrupt
 
 from graph import create_graph, generate_session_name
-from persistence import DynamoDBSaver
+from persistence import DynamoDBSaver, save_user_session, list_user_sessions
 from langgraph.checkpoint.memory import MemorySaver
 
 app = FastAPI(title="AI Chat Nebula Glass API")
-API_VERSION = "2.14.0"
+API_VERSION = "2.15.1"
+
+# ... (skipped some parts for brevity in replace call, but I will include them in old_string/new_string)
 
 # --- Attachment Processor ---
 def _process_attachments(text: str) -> str:
@@ -178,6 +180,25 @@ async def get_tokens(user=Depends(get_current_user)):
     used = get_user_tokens(user["uid"])
     return {"tokens_used": used, "limit": 500000}
 
+@app.get("/sessions")
+async def get_sessions(user=Depends(get_current_user)):
+    sessions = list_user_sessions(user["uid"])
+    return {"sessions": sessions}
+
+@app.get("/session/{thread_id}/history")
+async def get_session_history(thread_id: str, user=Depends(get_current_user)):
+    config = {"configurable": {"thread_id": thread_id}}
+    state = await asyncio.to_thread(graph.get_state, config)
+    if not state.values:
+        return {"messages": [], "session_name": None}
+    
+    return {
+        "messages": state.values.get("messages", []),
+        "session_name": state.values.get("session_name"),
+        "paused": state.values.get("paused", False),
+        "is_asking": state.values.get("is_asking", False)
+    }
+
 @app.get("/")
 def read_root():
     out = {"status": "Nebula Glass API is running", "version": API_VERSION}
@@ -263,6 +284,9 @@ async def post_input(chat_input: ChatInput, user=Depends(get_current_user)):
         processed_topic = _process_attachments(chat_input.seed_topic)
         # Start a new conversation by updating state. Graph will run when /chat/stream calls astream
         session_name = await asyncio.to_thread(generate_session_name, chat_input.seed_topic, user["uid"])
+        # Save session metadata
+        save_user_session(user["uid"], chat_input.thread_id, session_name)
+        
         initial_state = {
             "messages": [{"role": "Human", "content": f"Topic: {processed_topic}. Start conversation."}], 
             "paused": False, 
@@ -279,6 +303,13 @@ async def post_input(chat_input: ChatInput, user=Depends(get_current_user)):
         # Resume with human input by updating state as Human node
         _trace("post_input: graph.get_state")
         state = await asyncio.to_thread(graph.get_state, config)
+        
+        # Update session metadata to bump timestamp
+        session_name = state.values.get("session_name") if state.values else None
+        if not session_name:
+            session_name = f"Chat: {chat_input.content[:15]}..."
+        save_user_session(user["uid"], chat_input.thread_id, session_name)
+
         if state.next:
             # Since we used interrupt() in human_node:
             _trace("post_input: graph.update_state (resume from interrupt)")

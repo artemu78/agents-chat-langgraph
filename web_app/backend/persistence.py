@@ -227,3 +227,77 @@ def add_user_tokens(user_id: str, tokens: int) -> int:
     
     _LOCAL_USER_TOKENS[user_id] = _LOCAL_USER_TOKENS.get(user_id, 0) + tokens
     return _LOCAL_USER_TOKENS[user_id]
+
+# --- Session Management ---
+_LOCAL_SESSIONS = {}
+
+def save_user_session(user_id: str, thread_id: str, session_name: str):
+    import time
+    table_name = os.getenv("DYNAMODB_TABLE", "AI_Chat_Sessions")
+    timestamp = int(time.time())
+    
+    if os.getenv("AWS_LAMBDA_FUNCTION_NAME") or os.getenv("USE_DYNAMODB"):
+        import boto3
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(table_name)
+        try:
+            table.put_item(
+                Item={
+                    "thread_id": f"user_sessions#{user_id}",
+                    "checkpoint_id": f"session#{thread_id}",
+                    "actual_thread_id": thread_id,
+                    "session_name": session_name,
+                    "updated_at": timestamp,
+                    "type": "session_metadata"
+                }
+            )
+            return
+        except Exception as e:
+            print(f"DynamoDB save_user_session error: {e}")
+            pass
+            
+    if user_id not in _LOCAL_SESSIONS:
+        _LOCAL_SESSIONS[user_id] = []
+    
+    # Update existing or add new
+    for s in _LOCAL_SESSIONS[user_id]:
+        if s["thread_id"] == thread_id:
+            s["session_name"] = session_name
+            s["updated_at"] = timestamp
+            break
+    else:
+        _LOCAL_SESSIONS[user_id].append({
+            "thread_id": thread_id,
+            "session_name": session_name,
+            "updated_at": timestamp
+        })
+
+def list_user_sessions(user_id: str) -> list:
+    table_name = os.getenv("DYNAMODB_TABLE", "AI_Chat_Sessions")
+    if os.getenv("AWS_LAMBDA_FUNCTION_NAME") or os.getenv("USE_DYNAMODB"):
+        import boto3
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(table_name)
+        try:
+            from boto3.dynamodb.conditions import Key
+            response = table.query(
+                KeyConditionExpression=Key("thread_id").eq(f"user_sessions#{user_id}"),
+                ScanIndexForward=False # Newest first if we used timestamp as sort key, but we use thread_id. 
+                # We might need to sort manually or change schema.
+            )
+            sessions = []
+            for item in response.get("Items", []):
+                sessions.append({
+                    "thread_id": item["actual_thread_id"],
+                    "session_name": item["session_name"],
+                    "updated_at": int(item.get("updated_at", 0))
+                })
+            # Sort by updated_at descending
+            sessions.sort(key=lambda x: x["updated_at"], reverse=True)
+            return sessions
+        except Exception as e:
+            print(f"DynamoDB list_user_sessions error: {e}")
+            pass
+            
+    sessions = _LOCAL_SESSIONS.get(user_id, [])
+    return sorted(sessions, key=lambda x: x["updated_at"], reverse=True)
