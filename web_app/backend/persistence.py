@@ -272,6 +272,30 @@ def save_user_session(user_id: str, thread_id: str, session_name: str):
             "updated_at": timestamp
         })
 
+def delete_user_session(user_id: str, thread_id: str):
+    table_name = os.getenv("DYNAMODB_TABLE", "AI_Chat_Sessions")
+    if os.getenv("AWS_LAMBDA_FUNCTION_NAME") or os.getenv("USE_DYNAMODB"):
+        import boto3
+        dynamodb = boto3.resource("dynamodb")
+        table = dynamodb.Table(table_name)
+        try:
+            table.delete_item(
+                Key={
+                    "thread_id": f"user_sessions#{user_id}",
+                    "checkpoint_id": f"session#{thread_id}"
+                }
+            )
+            # Also optionally delete the checkpoints for this thread
+            # but usually we might want to keep history if it was just removed from "recent"
+            # For now, let's just remove from metadata
+            return
+        except Exception as e:
+            print(f"DynamoDB delete_user_session error: {e}")
+            pass
+            
+    if user_id in _LOCAL_SESSIONS:
+        _LOCAL_SESSIONS[user_id] = [s for s in _LOCAL_SESSIONS[user_id] if s["thread_id"] != thread_id]
+
 def list_user_sessions(user_id: str) -> list:
     table_name = os.getenv("DYNAMODB_TABLE", "AI_Chat_Sessions")
     if os.getenv("AWS_LAMBDA_FUNCTION_NAME") or os.getenv("USE_DYNAMODB"):

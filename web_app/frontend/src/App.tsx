@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Sun, Moon, MessageSquare, Send, Pause, Play, User, LogOut, Terminal, ShieldAlert, Paperclip } from 'lucide-react'
+import { Sun, Moon, MessageSquare, Send, Pause, Play, User, LogOut, Terminal, ShieldAlert, Paperclip, Pencil, Trash2, Check, X } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -156,6 +156,8 @@ function App() {
   const [loading, setLoading] = useState(true)
   const [tokensUsed, setTokensUsed] = useState<number | null>(null)
   const [sessions, setSessions] = useState<any[]>([])
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
   
   const { messages, isStreaming, isInterrupted, error, startStream, stopStream, setMessages, setIsInterrupted } = useSSE(threadId)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -309,6 +311,43 @@ function App() {
     setSessionName(null)
     setMessages([])
     setInputText('')
+  }
+
+  const handleDeleteSession = async (e: React.MouseEvent, tid: string) => {
+    e.stopPropagation()
+    if (!window.confirm('Delete this session?')) return
+    
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    try {
+      const headers = await getHeaders()
+      await fetch(`${apiUrl}/session/${tid}`, { method: 'DELETE', headers })
+      setSessions(prev => prev.filter(s => s.thread_id !== tid))
+      if (tid === threadId) {
+        handleNewChat()
+      }
+    } catch (e) {
+      console.error('Failed to delete session', e)
+    }
+  }
+
+  const handleRenameSession = async (tid: string, newName: string) => {
+    if (!newName.trim()) return
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    try {
+      const headers = await getHeaders()
+      await fetch(`${apiUrl}/session/${tid}`, { 
+        method: 'PATCH', 
+        headers,
+        body: JSON.stringify({ session_name: newName })
+      })
+      setSessions(prev => prev.map(s => s.thread_id === tid ? { ...s, session_name: newName } : s))
+      if (tid === threadId) {
+        setSessionName(newName)
+      }
+      setEditingSessionId(null)
+    } catch (e) {
+      console.error('Failed to rename session', e)
+    }
   }
 
   // Fetch tokens initially and when stream stops
@@ -524,21 +563,69 @@ function App() {
               <div 
                 key={s.thread_id}
                 onClick={() => handleSwitchSession(s.thread_id)}
-                className="glass-card" 
+                className="session-item glass-card" 
                 style={{ 
                   padding: '12px', 
                   background: s.thread_id === threadId ? 'var(--accent-glow)' : 'var(--glass-bg)', 
                   border: s.thread_id === threadId ? '1px solid var(--accent)' : '1px solid var(--glass-border)',
                   cursor: 'pointer',
-                  transition: 'all 0.2s ease'
+                  transition: 'all 0.2s ease',
+                  position: 'relative',
+                  display: 'flex',
+                  flexDirection: 'column'
                 }}
               >
-                <p style={{ fontSize: '0.9rem', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {s.session_name}
-                </p>
-                <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                  {new Date(s.updated_at * 1000).toLocaleDateString()}
-                </p>
+                {editingSessionId === s.thread_id ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }} onClick={e => e.stopPropagation()}>
+                    <input 
+                      autoFocus
+                      value={editingName}
+                      onChange={e => setEditingName(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') handleRenameSession(s.thread_id, editingName)
+                        if (e.key === 'Escape') setEditingSessionId(null)
+                      }}
+                      style={{ flex: 1, background: 'rgba(0,0,0,0.2)', border: '1px solid var(--accent)', borderRadius: '4px', padding: '4px 8px', color: 'var(--text-primary)', fontSize: '0.9rem', outline: 'none' }}
+                    />
+                    <button onClick={() => handleRenameSession(s.thread_id, editingName)} style={{ background: 'none', border: 'none', color: '#22c55e', cursor: 'pointer', padding: '2px' }}>
+                      <Check size={16} />
+                    </button>
+                    <button onClick={() => setEditingSessionId(null)} style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '2px' }}>
+                      <X size={16} />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                      <p style={{ fontSize: '0.9rem', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
+                        {s.session_name}
+                      </p>
+                      <div className="session-actions" style={{ display: 'flex', gap: '4px' }}>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setEditingSessionId(s.thread_id)
+                            setEditingName(s.session_name)
+                          }}
+                          style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '2px', opacity: 0.6 }}
+                          title="Rename"
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button 
+                          onClick={(e) => handleDeleteSession(e, s.thread_id)}
+                          style={{ background: 'none', border: 'none', color: 'var(--text-secondary)', cursor: 'pointer', padding: '2px', opacity: 0.6 }}
+                          title="Delete"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      {new Date(s.updated_at * 1000).toLocaleDateString()}
+                    </p>
+                  </>
+                )}
               </div>
             ))}
           </div>
@@ -740,6 +827,17 @@ function App() {
           0% { opacity: .2; }
           20% { opacity: 1; }
           100% { opacity: .2; }
+        }
+        .session-item .session-actions {
+          opacity: 0 !important;
+          transition: opacity 0.2s ease;
+        }
+        .session-item:hover .session-actions {
+          opacity: 1 !important;
+        }
+        .session-actions button:hover {
+          color: var(--accent) !important;
+          opacity: 1 !important;
         }
       `}</style>
     </div>

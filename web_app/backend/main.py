@@ -26,11 +26,11 @@ def _trace(msg: str, *args: object) -> None:
 from langgraph.errors import GraphInterrupt
 
 from graph import create_graph, generate_session_name
-from persistence import DynamoDBSaver, save_user_session, list_user_sessions
+from persistence import DynamoDBSaver, save_user_session, list_user_sessions, delete_user_session
 from langgraph.checkpoint.memory import MemorySaver
 
 app = FastAPI(title="AI Chat Nebula Glass API")
-API_VERSION = "2.16.1"
+API_VERSION = "2.17.0"
 
 # ... (skipped some parts for brevity in replace call, but I will include them in old_string/new_string)
 
@@ -145,6 +145,9 @@ class ChatInput(BaseModel):
     seed_topic: Optional[str] = None
     paused: Optional[bool] = None
 
+class SessionPatch(BaseModel):
+    session_name: str
+
 # --- Auth Dependency ---
 def _is_dev_mode() -> bool:
     return bool(os.getenv("DEV_MODE", "").strip())
@@ -184,6 +187,16 @@ async def get_tokens(user=Depends(get_current_user)):
 async def get_sessions(user=Depends(get_current_user)):
     sessions = list_user_sessions(user["uid"])
     return {"sessions": sessions}
+
+@app.delete("/session/{thread_id}")
+async def delete_session(thread_id: str, user=Depends(get_current_user)):
+    delete_user_session(user["uid"], thread_id)
+    return {"status": "deleted"}
+
+@app.patch("/session/{thread_id}")
+async def patch_session(thread_id: str, patch: SessionPatch, user=Depends(get_current_user)):
+    save_user_session(user["uid"], thread_id, patch.session_name)
+    return {"status": "updated", "session_name": patch.session_name}
 
 @app.get("/session/{thread_id}/history")
 async def get_session_history(thread_id: str, user=Depends(get_current_user)):
