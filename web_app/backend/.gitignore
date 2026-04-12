@@ -1,1 +1,9 @@
 sam-local-env.json
+.env
+firebase-credentials.json
+.aws-sam/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.DS_Store
