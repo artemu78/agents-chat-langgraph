@@ -29,6 +29,23 @@ from graph import create_graph, generate_session_name
 from persistence import DynamoDBSaver, save_user_session, list_user_sessions, delete_user_session
 from langgraph.checkpoint.memory import MemorySaver
 
+
+def _serialize_message(message):
+    if isinstance(message, dict):
+        return message
+    if hasattr(message, "content"):
+        role = getattr(message, "name", None) or getattr(message, "type", "AI")
+        if role == "human":
+            role = "Human"
+        elif role == "ai":
+            role = "AI"
+        return {"role": role, "content": getattr(message, "content", "")}
+    return {"role": "System", "content": str(message)}
+
+
+def _serialize_messages(messages):
+    return [_serialize_message(message) for message in messages or []]
+
 app = FastAPI(title="AI Chat Nebula Glass API")
 API_VERSION = "2.17.0"
 
@@ -206,7 +223,7 @@ async def get_session_history(thread_id: str, user=Depends(get_current_user)):
         return {"messages": [], "session_name": None}
     
     return {
-        "messages": state.values.get("messages", []),
+        "messages": _serialize_messages(state.values.get("messages", [])),
         "session_name": state.values.get("session_name"),
         "paused": state.values.get("paused", False),
         "is_asking": state.values.get("is_asking", False)
@@ -258,7 +275,8 @@ async def chat_stream(thread_id: str, request: Request):
 
                     if "messages" in updates:
                         last_msg = updates["messages"][-1]
-                        yield f"data: {json.dumps({'type': 'message', 'node': node_name, 'content': last_msg['content'], 'role': last_msg['role']})}\n\n"
+                        serialized = _serialize_message(last_msg)
+                        yield f"data: {json.dumps({'type': 'message', 'node': node_name, 'content': serialized.get('content', ''), 'role': serialized.get('role', 'System')})}\n\n"
                     
                     if isinstance(updates, dict) and updates.get("is_asking"):
                         yield f"data: {json.dumps({'type': 'interrupt', 'content': 'AI is waiting for clarification'})}\n\n"

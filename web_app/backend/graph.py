@@ -1,34 +1,140 @@
-from persistence import add_user_tokens, get_user_tokens
-import os
-import operator
-from typing import Annotated, TypedDict, List, Literal, NotRequired
-from google import genai
-from openai import OpenAI
-from langgraph.graph import StateGraph, START, END
+from __future__ import annotations
+
+from typing import Literal
+
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-# --- Configuration ---
-# Defaults match SAM template parameters; override with GEMINI_MODEL / OPENAI_MODEL.
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite-preview")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4-nano")
+from agents import build_agent_input, create_participant_agent, finalize_agent_message
+from models import GEMINI_MODEL, build_chat_model
+from persistence import get_user_tokens
+from state import GraphState, OrchestratorDecision
+from usage import record_usage_from_messages
 
-# --- State Definition ---
-class State(TypedDict):
-    messages: Annotated[List[dict], operator.add]
-    paused: bool
-    is_asking: bool
-    user_id: NotRequired[str]
-    session_name: NotRequired[str]
-    current_hat: NotRequired[str]
+HATS = {
+    "White": "Facts & Data: Focus strictly on information, available data, and neutral facts. What do we know?",
+    "Red": "Emotions & Intuition: Share gut feelings and emotional reactions without needing justification.",
+    "Black": "Caution & Risk: Logically identify potential obstacles, flaws, and risks. Why might this fail?",
+    "Yellow": "Benefits & Value: Focus on the positive aspects, advantages, and why this will work.",
+    "Green": "Creativity & Ideas: Propose alternatives, new possibilities, and creative solutions.",
+    "Blue": "Orchestrator: Manage the thinking process, summarize findings, and decide which hat to use next.",
+}
 
-def format_history(messages: List[dict], target_role_map: dict) -> List[dict]:
+
+def generate_session_name(topic: str, user_id: str) -> str:
+    clean_topic = (topic or "").strip() or "conversation"
+    return f"Chat: {clean_topic[:15]}..."
+
+
+def _run_agent(state: GraphState, participant_name: str, system_prompt: str, provider: str):
+    agent = create_participant_agent(provider, participant_name, system_prompt)
+    response = agent.invoke({"messages": build_agent_input(state, system_prompt)})
+    output_messages = response.get("messages", []) if isinstance(response, dict) else []
+    if not output_messages:
+        raise RuntimeError(f"{participant_name} agent produced no output")
+    final_message = finalize_agent_message(output_messages[-1], participant_name)
+    user_id = state.get("user_id", "anonymous")
+    record_usage_from_messages(user_id, [final_message])
+    return final_message
+
+
+def orchestrator_node(state: GraphState):
+    current_hat = state.get("current_hat", "White")
+    system_prompt = (
+        "You are the Orchestrator (Blue Hat). Manage the Six Thinking Hats session. "
+        "Use the web search tool when current facts are needed. Summarize progress and decide whether to delegate to Gemini/OpenAI, ask the human, or conclude."
+    )
+    final_message = _run_agent(state, "Orchestrator", system_prompt, "gemini")
+
+    structured_model = build_chat_model("gemini", GEMINI_MODEL).with_structured_output(OrchestratorDecision)
+    decision = structured_model.invoke([
+        SystemMessage(
+            content=(
+                "Convert the orchestrator's response into a strict routing decision. "
+                "Use delegate only if next_hat and next_model are both present. "
+                "Use ask_human for clarification and conclude to end the session."
+            )
+        ),
+        final_message,
+    ])
+    decision.validate()
+
+    return {
+        "messages": [final_message],
+        "orchestrator_decision": decision.model_dump(),
+        "last_participant": "Orchestrator",
+        "current_hat": decision.next_hat or current_hat,
+        "is_asking": False,
+    }
+
+
+def participant_node(state: GraphState, participant_name: str, provider: str):
+    hat = state.get("current_hat", "Green")
+    hat_desc = HATS.get(hat, HATS["Green"])
+    system_prompt = (
+        f"You are {participant_name}. You are currently wearing the {hat} Hat. {hat_desc}. "
+        "Provide your answer from that perspective. Use the web search tool when needed. Do not route the graph."
+    )
+    final_message = _run_agent(state, participant_name, system_prompt, provider)
+    return {
+        "messages": [final_message],
+        "last_participant": participant_name,
+        "is_asking": False,
+    }
+
+
+def gemini_node(state: GraphState):
+    return participant_node(state, "Gemini", "gemini")
+
+
+def openai_node(state: GraphState):
+    return participant_node(state, "OpenAI", "openai")
+
+
+def human_node(state: GraphState):
+    question = state.get("clarification_question") or "Please clarify the next step."
+    human_input = interrupt(question)
+    return {
+        "messages": [HumanMessage(content=human_input)],
+        "last_participant": "Human",
+        "is_asking": False,
+        "clarification_question": None,
+    }
+
+
+def limit_reached_node(state: GraphState):
+    return {
+        "messages": [AIMessage(content="Token limit reached. Input blocked.", name="System")],
+        "paused": True,
+        "is_asking": False,
+    }
+
+
+def _last_message_role(state: GraphState):
+    messages = state.get("messages", []) or []
+    if not messages:
+        return None, None
+    last = messages[-1]
+    if isinstance(last, dict):
+        return last.get("role"), last.get("content")
+    if hasattr(last, "name") and last.name:
+        return last.name, getattr(last, "content", "")
+    return getattr(last, "type", None), getattr(last, "content", "")
+
+
+def format_history(messages, target_role_map: dict):
     history = []
     for msg in messages:
-        role = msg["role"]
-        content = msg["content"]
+        if isinstance(msg, dict):
+            role = msg.get("role", "Human")
+            content = msg.get("content", "")
+        else:
+            role = getattr(msg, "name", None) or getattr(msg, "type", "Human")
+            content = getattr(msg, "content", "")
         if role == "Human":
             display_content = f"[CLARIFICATION FROM HUMAN]: {content}"
-        elif role in ["Gemini", "OpenAI", "Orchestrator"] and role != target_role_map["self"]:
+        elif role in ["Gemini", "OpenAI", "Orchestrator"] and role != target_role_map.get("self"):
             display_content = f"[{role}]: {content}"
         else:
             display_content = content
@@ -39,159 +145,71 @@ def format_history(messages: List[dict], target_role_map: dict) -> List[dict]:
             history.append({"role": mapped_role, "content": display_content})
     return history
 
-def generate_session_name(topic: str, user_id: str) -> str:
-    try:
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        prompt = f"Summarize this topic into a short 3-5 words session name. Do not include quotes or punctuation at the end. Topic: {topic}"
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt
-        )
-        text = response.text.strip()
-        try:
-            tokens = response.usage_metadata.candidates_token_count
-        except Exception:
-            tokens = len(text.split())
-        add_user_tokens(user_id, tokens)
-        return text
-    except Exception:
-        return f"Chat: {topic[:15]}..."
 
-# --- Nodes ---
-
-HATS = {
-    "White": "Facts & Data: Focus strictly on information, available data, and neutral facts. What do we know?",
-    "Red": "Emotions & Intuition: Share gut feelings and emotional reactions without needing justification.",
-    "Black": "Caution & Risk: Logically identify potential obstacles, flaws, and risks. Why might this fail?",
-    "Yellow": "Benefits & Value: Focus on the positive aspects, advantages, and why this will work.",
-    "Green": "Creativity & Ideas: Propose alternatives, new possibilities, and creative solutions.",
-    "Blue": "Orchestrator: Manage the thinking process, summarize findings, and decide which hat to use next."
-}
-
-def orchestrator_node(state: State):
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    role_map = {"self": "Orchestrator", "Orchestrator": "model", "gemini": True}
-    history = format_history(state["messages"], role_map)
-    sys_instr = f"You are the Orchestrator (Blue Hat). Your role is to manage the '6 Thinking Hats' session. Summarize the progress and explicitly decide which model (Gemini or OpenAI) should take which hat next (White, Red, Black, Yellow, or Green). You MUST end your message by specifying the next hat in brackets, e.g., '[NEXT: Black Hat for OpenAI]'. If the session has reached a natural conclusion and all aspects have been discussed, end your message with '[SESSION CONCLUDED]' instead. Be concise and process-oriented."
-    
-    try:
-        full_contents = [{"role": "user", "parts": [{"text": sys_instr}]}] + history
-        response = client.models.generate_content(model=GEMINI_MODEL, contents=full_contents)
-        text = response.text.strip()
-        
-        user_id = state.get("user_id", "anonymous")
-        try:
-            tokens = response.usage_metadata.candidates_token_count
-        except Exception:
-            tokens = len(text.split())
-        add_user_tokens(user_id, tokens)
-        
-        import re
-        match = re.search(r"\[NEXT: (White|Red|Black|Yellow|Green) Hat for (Gemini|OpenAI)\]", text)
-        next_hat = match.group(1) if match else "White"
-        
-        return {"messages": [{"role": "Orchestrator", "content": text}], "current_hat": next_hat, "is_asking": "[ASK]" in text}
-    except Exception as e:
-        return {"messages": [{"role": "System", "content": f"Orchestrator Error: {e}"}]}
-
-def gemini_node(state: State):
-    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-    hat = state.get("current_hat", "Green")
-    hat_desc = HATS.get(hat, HATS["Green"])
-    role_map = {"self": "Gemini", "Gemini": "model", "gemini": True}
-    history = format_history(state["messages"], role_map)
-    sys_instr = f"You are Gemini. Currently, you are wearing the {hat} Hat. {hat_desc} Provide your input based ONLY on this perspective. Use '[ASK]' for human clarification. Be concise."
-    
-    try:
-        full_contents = [{"role": "user", "parts": [{"text": sys_instr}]}] + history
-        response = client.models.generate_content(model=GEMINI_MODEL, contents=full_contents)
-        text = response.text.strip()
-        
-        user_id = state.get("user_id", "anonymous")
-        try:
-            tokens = response.usage_metadata.candidates_token_count
-        except Exception:
-            tokens = len(text.split())
-        add_user_tokens(user_id, tokens)
-        
-        return {"messages": [{"role": "Gemini", "content": f"[{hat} Hat] {text}"}], "is_asking": "[ASK]" in text}
-    except Exception as e:
-        return {"messages": [{"role": "System", "content": f"Gemini Error: {e}"}]}
-
-def openai_node(state: State):
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    hat = state.get("current_hat", "Black")
-    hat_desc = HATS.get(hat, HATS["Black"])
-    role_map = {"self": "OpenAI", "OpenAI": "assistant"}
-    history = format_history(state["messages"], role_map)
-    sys_msg = {"role": "system", "content": f"You are GPT. Currently, you are wearing the {hat} Hat. {hat_desc} Provide your input based ONLY on this perspective. Use '[ASK]' for human clarification. Be concise."}
-    
-    try:
-        response = client.chat.completions.create(model=OPENAI_MODEL, messages=[sys_msg] + history)
-        text = response.choices[0].message.content.strip()
-        
-        user_id = state.get("user_id", "anonymous")
-        try:
-            tokens = response.usage.completion_tokens
-        except Exception:
-            tokens = len(text.split())
-        add_user_tokens(user_id, tokens)
-        
-        return {"messages": [{"role": "OpenAI", "content": f"[{hat} Hat] {text}"}], "is_asking": "[ASK]" in text}
-    except Exception as e:
-        return {"messages": [{"role": "System", "content": f"OpenAI Error: {e}"}]}
-
-def human_node(state: State):
-    # Use LangGraph interrupt for human input
-    human_input = interrupt("Waiting for human clarification...")
-    return {"messages": [{"role": "Human", "content": human_input}], "is_asking": False}
-
-
-def limit_reached_node(state: State):
-    return {"messages": [{"role": "System", "content": "Token limit reached. Input blocked."}], "paused": True}
-
-# --- Router ---
-def router(state: State) -> Literal["Gemini", "OpenAI", "Orchestrator", "Human", "LimitReached", "__end__"]:
-    # Check if we should pause (e.g., between turns)
-    # The 'paused' state can be set via update_state from the API
+def router(state: GraphState) -> Literal["Gemini", "OpenAI", "Orchestrator", "Human", "LimitReached", "__end__"]:
     if state.get("paused", False):
         return END
 
     user_id = state.get("user_id", "anonymous")
-    if get_user_tokens(user_id) >= 500000:
-        # If limit reached, we want to stop and show error
-        # Since router doesn't mutate state, we must route to a new node that emits the error,
-        # but we don't have one. Instead, we can route to END, and the frontend will just see no more messages.
-        # Let's route to a special node that returns the error message
-        return "LimitReached" 
+    if get_user_tokens(user_id) >= 500_000:
+        return "LimitReached"
 
-    last_msg = state["messages"][-1]
-    # Error messages from nodes use role "System"; do not re-enter Gemini/OpenAI or we loop forever on API failures.
-    if last_msg["role"] == "System":
+    step_count = state.get("step_count", 0)
+    if step_count >= 10:
         return END
 
-    if "[ASK]" in last_msg["content"]: 
-        return "Human"
-    
-    if "[SESSION CONCLUDED]" in last_msg["content"]:
-        return END
-    
-    if last_msg["role"] == "Human":
+    last_participant = state.get("last_participant")
+    if last_participant in {"Gemini", "OpenAI", "Human"}:
         return "Orchestrator"
 
-    if last_msg["role"] == "Orchestrator":
+    decision = state.get("orchestrator_decision")
+    if decision:
+        action = decision.get("action")
+        if action == "delegate":
+            return decision.get("next_model") or "Gemini"
+        if action == "ask_human":
+            return "Human"
+        return END
+
+    role, content = _last_message_role(state)
+    if role == "System":
+        return END
+    if isinstance(content, str) and "[ASK]" in content:
+        return "Human"
+    if isinstance(content, str) and "[SESSION CONCLUDED]" in content:
+        return END
+
+    messages = state.get("messages", []) or []
+    last_message = messages[-1] if messages else None
+
+    if role == "Human":
+        prior_participant = None
+        for message in reversed(messages[:-1]):
+            if isinstance(message, dict):
+                msg_role = message.get("role")
+            else:
+                msg_role = getattr(message, "name", None) or getattr(message, "type", None)
+            if msg_role in {"Gemini", "OpenAI"}:
+                prior_participant = msg_role
+                break
+        return "OpenAI" if prior_participant == "Gemini" else "Gemini"
+
+    if role in {"Gemini", "OpenAI"}:
+        if isinstance(last_message, BaseMessage) and getattr(last_message, "name", None) in {"Gemini", "OpenAI"}:
+            return "Orchestrator"
+        return "OpenAI" if role == "Gemini" else "Gemini"
+
+    if role == "Orchestrator":
         import re
-        text = last_msg["content"]
-        match = re.search(r"\[NEXT: (White|Red|Black|Yellow|Green) Hat for (Gemini|OpenAI)\]", text)
+        match = re.search(r"\[NEXT: (White|Red|Black|Yellow|Green) Hat for (Gemini|OpenAI)\]", content or "")
         if match:
             return match.group(2)
-        return "Gemini" # Fallback
-
+        return "Gemini"
     return "Orchestrator"
 
-# --- Graph ---
+
 def create_graph(checkpointer=None):
-    builder = StateGraph(State)
+    builder = StateGraph(GraphState)
     builder.add_node("Orchestrator", orchestrator_node)
     builder.add_node("Gemini", gemini_node)
     builder.add_node("OpenAI", openai_node)
